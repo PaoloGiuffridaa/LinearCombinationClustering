@@ -346,16 +346,7 @@ def find_clusters(slots: dict, min_samples: int) -> int:
 # ---------------------------------------------------------------------------
 # Plot results
 # ---------------------------------------------------------------------------
-
 def plot_result(slots: dict, n_clusters: int, n_real_clusters: int, threshold: float, min_samples: int) -> None:
-    """
-    Plotta per ogni slot quante PR ci ricadono.
-
-    - Barre: numero di PR per slot
-    - Linea rossa: min_samples
-    - Box testo: threshold, min_samples, cluster trovati, cluster reali
-    """
-
     if not slots:
         print("Nessuno slot da plottare.")
         return
@@ -376,27 +367,39 @@ def plot_result(slots: dict, n_clusters: int, n_real_clusters: int, threshold: f
     slot_ids = list(range(first_slot, last_slot + 1))
     counts = [slots.get(slot_id, 0) for slot_id in slot_ids]
 
-    plt.figure(figsize=(12, 5))
+    plt.figure(figsize=(12, 5.5))
 
-    plt.bar(slot_ids, counts, label="PR per slot")
+    plt.bar(
+        slot_ids,
+        counts,
+        label="Probe Request per intervallo"
+    )
 
     plt.axhline(
         y=min_samples,
         color="red",
         linestyle="--",
         linewidth=2,
-        label=f"Min samples = {min_samples}"
+        label=f"Soglia minima = {min_samples} PR"
     )
 
-    plt.title("Numero di PR per slot")
-    plt.xlabel("Slot")
-    plt.ylabel("Numero di PR")
+    plt.title(
+        "Distribuzione degli score delle Probe Request",
+        fontsize=18,
+        fontweight="bold"
+    )
+
+    plt.xlabel("Intervallo di score", fontsize=16)
+    plt.ylabel("Numero di Probe Request", fontsize=16)
+
+    plt.xticks(fontsize=13)
+    plt.yticks(fontsize=13)
 
     info_text = (
-        f"Threshold = {threshold}\n"
-        f"Min samples = {min_samples}\n"
-        f"Cluster trovati = {n_clusters}\n"
-        f"Cluster reali = {n_real_clusters}"
+        f"Ampiezza intervallo = {threshold}\n"
+        f"Soglia minima = {min_samples} PR\n"
+        f"Cluster stimati = {n_clusters}\n"
+        f"Dispositivi reali = {n_real_clusters}"
     )
 
     plt.text(
@@ -406,14 +409,19 @@ def plot_result(slots: dict, n_clusters: int, n_real_clusters: int, threshold: f
         transform=plt.gca().transAxes,
         verticalalignment="top",
         horizontalalignment="right",
+        fontsize=13,
         bbox=dict(
             boxstyle="round",
             facecolor="white",
-            alpha=0.8
+            alpha=0.9
         )
     )
 
-    plt.legend()
+    plt.legend(
+        loc="upper left",
+        fontsize=13
+    )
+
     plt.grid(axis="y", alpha=0.3)
     plt.tight_layout()
     plt.show()

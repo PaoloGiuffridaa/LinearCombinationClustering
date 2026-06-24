@@ -9,7 +9,7 @@ from features.linear_combination import (
     count_real_clusters
 )
 
-DATA_PATH    = "app/data/probe_requests/scenario_5_burst_features.json"
+DATA_PATH    = "app/data/probe_requests/all_A_burst_features.json"
 WEIGHTS_PATH = "app/data/weights/weights.json"
 
 THRESHOLD = 0.1
