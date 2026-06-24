@@ -1,0 +1,36 @@
+{
+  "_comment": "Pesi per la combinazione lineare delle IE delle Probe Request (file grezzo).",
+  "_note_vettori": "ie0, ie1, ie50, ie127_0 sono stringhe che rappresentano liste Python. Vengono convertite in scalare tramite somma delle componenti.",
+  "_note_mac": "Il MAC viene convertito in intero a 48 bit normalizzato [0,1]. Peso 0 perché i MAC sono randomizzati.",
+  "_note_esclusi": "start_time, end_time, start_seq, end_seq, label sono esclusi dal calcolo (metadati/target).",
+
+  "mac": 0.0,
+
+  "delta_time": 0.1,
+  "delta_seq": 0.1,
+  "num_packets": 0.1,
+
+  "ie0": 0.2,
+  "ie1": 0.6,
+  "ie50": 0.5,
+
+  "ie45_ampduparam": 0.5,
+  "ie45_asel": 0.4,
+  "ie45_capabilities": 0.8,
+  "ie45_txbf": 0.4,
+  "ie45_mcsset_txunequalmod": 0.2,
+  "ie45_mcsset_txrxmcsnotequal": 0.3,
+  "ie45_mcsset_txmaxss": 0.5,
+  "ie45_mcsset_txsetdefined": 0.3,
+  "ie45_mcsset_highestdatarate": 0.4,
+  "ie45_rxbitmask_0to7": 0.6,
+  "ie45_rxbitmask_8to15": 0.6,
+  "ie45_rxbitmask_16to23": 0.5,
+  "ie45_rxbitmask_24to31": 0.4,
+  "ie45_rxbitmask_32": 0.3,
+  "ie45_rxbitmask_33to38": 0.3,
+  "ie45_rxbitmask_39to52": 0.2,
+  "ie45_rxbitmask_53to76": 0.2,
+
+  "ie127_0": 0.5
+}
