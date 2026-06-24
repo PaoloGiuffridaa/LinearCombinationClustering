@@ -1,42 +1,44 @@
-"""
-main.py
-=======
-Punto di ingresso per la Combinazione Lineare su Probe Request.
-Modifica i parametri nelle sezioni PARAMETRI e poi esegui questo file.
-"""
-
 from features.linear_combination import (
+    calculate_slots,
+    find_clusters,
     load_json,
     load_weights,
-    compute_all_scores,
-    evaluate,
-    print_report,
-    print_scores,
+    normalize_json_data,
+    calculate_score,
+    plot_result,
+    count_real_clusters
 )
 
-# ============================================================
-#   PARAMETRI
-# ============================================================
+DATA_PATH    = "app/data/probe_requests/scenario_5_burst_features.json"
+WEIGHTS_PATH = "app/data/weights/weights.json"
 
-DATA_PATH    = "app/data/probe_requests/scenario_0_burst_features.json"   # file PR (grezzo o preprocessato)
-WEIGHTS_PATH = "app/data/weights/weights.json"                     # file pesi
+THRESHOLD = 0.1
+MIN_SAMPLES = 3
 
-THRESHOLD    = 5.0    # soglia intorno: |S_a - S_b| <= threshold → stesso dispositivo
+SHOW_SCORES = True
 
-SHOW_SCORES  = True   # True → stampa il punteggio di ogni singola PR
-
-# ============================================================
-#   MAIN
-# ============================================================
 
 if __name__ == "__main__":
-    data    = load_json(DATA_PATH)
+    data = load_json(DATA_PATH)
     weights = load_weights(WEIGHTS_PATH)
 
-    records = compute_all_scores(data, weights)
+    scaled_data = normalize_json_data(data)
 
-    if SHOW_SCORES:
-        print_scores(data, records)
+    records = calculate_score(scaled_data, weights)
 
-    metrics = evaluate(records, threshold=THRESHOLD)
-    print_report(records, metrics, threshold=THRESHOLD)
+    slots = calculate_slots(records, THRESHOLD)
+
+    found_clusters = find_clusters(slots, MIN_SAMPLES)
+    real_clusters = count_real_clusters(records)
+
+    print(f"Numero Probe Request: {len(data)}")
+    print(f"Cluster trovati: {found_clusters}")
+    print(f"Cluster reali: {real_clusters}")
+
+    plot_result(
+        slots,
+        found_clusters,
+        real_clusters,
+        THRESHOLD,
+        MIN_SAMPLES
+    )

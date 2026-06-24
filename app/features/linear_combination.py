@@ -7,15 +7,26 @@ Nessuna logica di main: tutto viene chiamato da main.py.
 
 import json
 import ast
-import itertools
+import math
 from pathlib import Path
-from collections import defaultdict
+
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+import pandas as pd
 
 
 # ---------------------------------------------------------------------------
-# Campi esclusi dal calcolo (metadati / target)
+# Campi esclusi dal calcolo
 # ---------------------------------------------------------------------------
-EXCLUDED_FIELDS = {"start_time", "end_time", "start_seq", "end_seq", "label", "mac"}
+
+EXCLUDED_FIELDS = {
+    "start_time",
+    "end_time",
+    "start_seq",
+    "end_seq",
+    "label",
+    "mac"
+}
 
 
 # ---------------------------------------------------------------------------
@@ -27,269 +38,382 @@ def load_json(path: str) -> list:
     Carica il file JSON delle PR e restituisce sempre una lista di dizionari.
 
     Gestisce due formati:
-      - Lista di dict  : [{"mac": "aa:bb:...", "ie1": ..., "label": 1}, ...]
-      - Dict con MAC come chiave : {"aa:bb:...": {"ie1": ..., "label": 1}, ...}
-        In questo caso il MAC viene iniettato dentro ogni record come campo "mac".
+      - Lista di dict:
+        [{"mac": "aa:bb:...", "ie1": ..., "label": 1}, ...]
+
+      - Dict con MAC come chiave:
+        {"aa:bb:...": {"ie1": ..., "label": 1}, ...}
+
+        In questo caso il MAC viene inserito dentro ogni record.
     """
+
     data = json.loads(Path(path).read_text())
+
     if isinstance(data, dict):
-        # Il MAC e' la chiave esterna: lo inietto dentro ogni record
         records = []
+
         for mac, record in data.items():
             entry = {"mac": mac}
             entry.update(record)
             records.append(entry)
+
         return records
-    # Lista: gestisce eventuale doppia serializzazione (elementi stringa)
+
     if data and isinstance(data[0], str):
         data = [json.loads(item) for item in data]
+
     return data
 
 
 def load_weights(path: str) -> dict:
+    """
+    Carica i pesi da file JSON.
+    Le chiavi che iniziano con '_' vengono ignorate.
+    """
+
     raw = json.loads(Path(path).read_text())
-    # Rimuove chiavi commento (iniziano con '_')
-    return {k: v for k, v in raw.items() if not k.startswith("_")}
+
+    return {
+        key: value
+        for key, value in raw.items()
+        if not key.startswith("_")
+    }
 
 
 # ---------------------------------------------------------------------------
-# Conversione dei tipi di IE in scalare
+# Conversione dei campi in scalari
 # ---------------------------------------------------------------------------
 
 def mac_to_scalar(mac_str: str) -> float:
     """
-    Converte 'aa:bb:cc:dd:ee:ff' in un intero a 48 bit normalizzato in [0, 1].
+    Converte un MAC address in uno scalare normalizzato in [0, 1].
+    Esempio: 'aa:bb:cc:dd:ee:ff'
     """
+
     try:
         parts = mac_str.strip().split(":")
+
         mac_int = 0
+
         for byte in parts:
             mac_int = (mac_int << 8) | int(byte, 16)
+
         return mac_int / 0xFFFFFFFFFFFF
+
     except Exception:
         return 0.0
 
 
 def field_to_scalar(value) -> float:
     """
-    Converte il valore di un campo IE in uno scalare:
-      - None / "None"       -> 0.0
-      - int / float         -> float(value)
-      - stringa lista JSON  -> somma delle componenti
-      - lista Python        -> somma delle componenti
-      - altra stringa       -> 0.0
+    Converte il valore di un campo IE in uno scalare.
+
+    Regole:
+      - None / "None" / "" -> 0.0
+      - int / float        -> float(value)
+      - lista Python       -> somma degli elementi
+      - stringa lista      -> somma degli elementi
+      - altro              -> 0.0
     """
+
     if value is None:
         return 0.0
+
     if isinstance(value, (int, float)):
         return float(value)
+
     if isinstance(value, list):
-        return float(sum(value))
+        try:
+            return float(sum(value))
+        except Exception:
+            return 0.0
+
     if isinstance(value, str):
         s = value.strip()
+
         if s in ("None", ""):
             return 0.0
+
         try:
             parsed = ast.literal_eval(s)
+
             if isinstance(parsed, (list, tuple)):
                 return float(sum(parsed))
+
             if isinstance(parsed, (int, float)):
                 return float(parsed)
+
         except Exception:
             pass
+
     return 0.0
 
 
 # ---------------------------------------------------------------------------
-# Calcolo del punteggio S per una singola PR
+# Normalizzazione
 # ---------------------------------------------------------------------------
 
-def compute_score(record: dict, weights: dict) -> float:
+def normalize_json_data(data: list) -> list:
     """
-    Calcola S = sum(alpha_i * x_i) per una PR.
+    Converte ogni IE in scalare e poi normalizza ogni colonna IE in [0, 1].
 
-    Il MAC viene gestito separatamente con il peso 'mac'.
-    I campi in EXCLUDED_FIELDS vengono ignorati.
+    Restituisce una lista di PR, non un DataFrame.
     """
-    score = 0.0
 
-    # Contributo MAC (peso 0 se randomizzato)
-    mac_weight = weights.get("mac", 0.0)
-    if mac_weight > 0:
-        score += mac_weight * mac_to_scalar(record.get("mac", ""))
+    scalar_data = []
 
-    # Contributo IE
-    for field, alpha in weights.items():
-        if field == "mac" or alpha == 0.0 or field in EXCLUDED_FIELDS:
-            continue
-        value = record.get(field)
-        if value is None:
-            continue
-        score += alpha * field_to_scalar(value)
+    for pr in data:
+        new_pr = {}
 
-    return score
+        for key, value in pr.items():
+            if key in EXCLUDED_FIELDS:
+                new_pr[key] = value
+            else:
+                new_pr[key] = field_to_scalar(value)
 
+        scalar_data.append(new_pr)
 
-# ---------------------------------------------------------------------------
-# Calcolo punteggi per un intero dataset
-# ---------------------------------------------------------------------------
+    df_data = pd.DataFrame(scalar_data)
 
-def compute_all_scores(data: list, weights: dict) -> list:
-    """
-    Restituisce lista di dict con 'label', 'mac' e 'score' per ogni PR.
-    """
-    return [
-        {
-            "label": pr.get("label"),
-            "mac":   pr.get("mac"),
-            "score": compute_score(pr, weights),
-        }
-        for pr in data
+    ie_columns = [
+        col for col in df_data.columns
+        if col not in EXCLUDED_FIELDS
     ]
 
+    if ie_columns:
+        df_data[ie_columns] = df_data[ie_columns].apply(
+            pd.to_numeric,
+            errors="coerce"
+        )
+
+        df_data[ie_columns] = df_data[ie_columns].fillna(0.0)
+
+        scaler = MinMaxScaler()
+        df_data[ie_columns] = scaler.fit_transform(df_data[ie_columns])
+
+        df_data[ie_columns] = df_data[ie_columns].fillna(0.0)
+
+    return df_data.to_dict("records")
+
 
 # ---------------------------------------------------------------------------
-# Confronto tra coppie di PR
+# Calcolo score Probe Request
 # ---------------------------------------------------------------------------
 
-def same_device(score_a: float, score_b: float, threshold: float) -> bool:
-    """True se le due PR ricadono nello stesso intorno (|S_a - S_b| <= threshold)."""
-    return abs(score_a - score_b) <= threshold
-
-
-# ---------------------------------------------------------------------------
-# Valutazione (metriche su tutte le coppie)
-# ---------------------------------------------------------------------------
-
-def evaluate(records: list, threshold: float) -> dict:
+def calculate_score(data: list, weights: dict) -> list:
     """
-    Confronta tutte le coppie di PR e restituisce un dict con:
-      tp, fp, tn, fn, accuracy, precision, recall, f1
+    Calcola lo score di ogni PR come combinazione lineare dei pesi.
+
+    Restituisce una lista:
+    [
+        {"mac": ..., "label": ..., "score": ...},
+        ...
+    ]
     """
-    tp = fp = tn = fn = 0
-    for i, j in itertools.combinations(range(len(records)), 2):
-        a, b = records[i], records[j]
-        pred_same = same_device(a["score"], b["score"], threshold)
-        real_same = (a["label"] == b["label"])
-        if pred_same and real_same:
-            tp += 1
-        elif pred_same and not real_same:
-            fp += 1
-        elif not pred_same and not real_same:
-            tn += 1
-        else:
-            fn += 1
 
-    total = tp + fp + tn + fn
-    precision = tp / (tp + fp)             if (tp + fp) > 0 else 0.0
-    recall    = tp / (tp + fn)             if (tp + fn) > 0 else 0.0
-    f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-    accuracy  = (tp + tn) / total          if total > 0 else 0.0
+    scores = []
 
-    return {
-        "tp": tp, "fp": fp, "tn": tn, "fn": fn,
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
+    for pr in data:
+        score = 0.0
+
+        for key, weight in weights.items():
+            if key in EXCLUDED_FIELDS:
+                continue
+
+            value = pr.get(key, 0.0)
+
+            if value is None:
+                value = 0.0
+
+            try:
+                value = float(value)
+            except Exception:
+                value = 0.0
+
+            if math.isnan(value):
+                value = 0.0
+
+            score += value * weight
+
+        scores.append({
+            "mac": pr.get("mac"),
+            "label": pr.get("label"),
+            "score": score
+        })
+
+    return scores
+
+
+# ---------------------------------------------------------------------------
+# Calcolo slot e clustering
+# ---------------------------------------------------------------------------
+
+def count_real_clusters(records: list) -> int:
+    """
+    Conta il numero effettivo di cluster/dispositivi reali usando le label.
+    """
+
+    labels = {
+        record.get("label")
+        for record in records
+        if record.get("label") is not None
     }
 
+    return len(labels)
 
-# ---------------------------------------------------------------------------
-# Statistiche per label
-# ---------------------------------------------------------------------------
-
-def stats_by_label(records: list) -> dict:
+def calculate_slots(records: list, threshold: float) -> dict:
     """
-    Restituisce un dict label -> {n, min, max, mean, range} dei punteggi.
+    Divide gli score in slot di ampiezza threshold.
+
+    Per ogni PR incrementa il contatore dello slot in cui ricade.
+
+    Restituisce:
+    {
+        slot_id: numero_PR_nello_slot,
+        ...
+    }
+
+    Gli slot vuoti intermedi vengono inseriti con valore 0.
+    Gli slot vuoti prima del primo slot occupato e dopo l'ultimo non compaiono.
     """
-    by_label = defaultdict(list)
-    for r in records:
-        by_label[r["label"]].append(r["score"])
 
-    result = {}
-    for label, scores in by_label.items():
-        mn, mx = min(scores), max(scores)
-        result[label] = {
-            "n":     len(scores),
-            "min":   mn,
-            "max":   mx,
-            "mean":  sum(scores) / len(scores),
-            "range": mx - mn,
-        }
-    return result
+    if not records:
+        return {}
+
+    if threshold <= 0:
+        raise ValueError("threshold deve essere maggiore di 0")
+
+    valid_scores = []
+
+    for record in records:
+        score = record.get("score")
+
+        if score is None:
+            continue
+
+        try:
+            score = float(score)
+        except Exception:
+            continue
+
+        if math.isnan(score):
+            continue
+
+        valid_scores.append(score)
+
+    if not valid_scores:
+        return {}
+
+    min_score = min(valid_scores)
+
+    slots = {}
+
+    for score in valid_scores:
+        slot_id = int((score - min_score) / threshold)
+
+        if slot_id not in slots:
+            slots[slot_id] = 0
+
+        slots[slot_id] += 1
+
+    first_slot = min(slots.keys())
+    last_slot = max(slots.keys())
+
+    full_slots = {}
+
+    for slot_id in range(first_slot, last_slot + 1):
+        full_slots[slot_id] = slots.get(slot_id, 0)
+
+    return full_slots
 
 
-# ---------------------------------------------------------------------------
-# Clustering per intorno
-# ---------------------------------------------------------------------------
-
-def find_clusters(records: list, threshold: float) -> list:
+def find_clusters(slots: dict, min_samples: int) -> int:
     """
-    Raggruppa le PR in cluster in base al punteggio: due PR appartengono
-    allo stesso cluster se |S_a - S_b| <= threshold.
+    Conta quanti slot hanno almeno min_samples PR.
 
-    Algoritmo union-find semplice: ogni PR viene assegnata al primo cluster
-    il cui centro (media dei punteggi) rientra nell'intorno.
-    Restituisce una lista di cluster_id (uno per ogni record, stesso ordine).
+    Ogni slot con conteggio >= min_samples viene considerato cluster.
     """
-    cluster_ids = [-1] * len(records)
-    cluster_scores = []   # lista di liste di score per ogni cluster
 
-    for i, r in enumerate(records):
-        assigned = False
-        for cid, scores in enumerate(cluster_scores):
-            center = sum(scores) / len(scores)
-            if abs(r["score"] - center) <= threshold:
-                cluster_ids[i] = cid
-                scores.append(r["score"])
-                assigned = True
-                break
-        if not assigned:
-            cluster_ids[i] = len(cluster_scores)
-            cluster_scores.append([r["score"]])
+    clusters = 0
 
-    return cluster_ids
+    for slot_id, count in slots.items():
+        if count >= min_samples:
+            clusters += 1
+
+    return clusters
 
 
 # ---------------------------------------------------------------------------
-# Stampa report
+# Plot results
 # ---------------------------------------------------------------------------
 
-def print_report(records: list, metrics: dict, threshold: float) -> None:
-    cluster_ids = find_clusters(records, threshold)
-    n_labels   = len(set(r["label"] for r in records))
-    n_clusters = len(set(cluster_ids))
+def plot_result(slots: dict, n_clusters: int, n_real_clusters: int, threshold: float, min_samples: int) -> None:
+    """
+    Plotta per ogni slot quante PR ci ricadono.
 
-    print(f"\n{'='*62}")
-    print(f"  COMBINAZIONE LINEARE - Risultati")
-    print(f"{'='*62}")
-    print(f"  Numero PR      : {len(records)}")
-    print(f"  Threshold      : {threshold}")
-    print(f"  Label reali    : {n_labels}")
-    print(f"  Cluster trovati: {n_clusters}")
-    print()
+    - Barre: numero di PR per slot
+    - Linea rossa: min_samples
+    - Box testo: threshold, min_samples, cluster trovati, cluster reali
+    """
 
-    stats = stats_by_label(records)
-    print(f"  {'Label':<10} {'N':>4}  {'Min':>12}  {'Max':>12}  {'Mean':>12}  {'Range':>12}")
-    print(f"  {'-'*10} {'-'*4}  {'-'*12}  {'-'*12}  {'-'*12}  {'-'*12}")
-    for label in sorted(stats):
-        s = stats[label]
-        print(f"  {label:<10} {s['n']:>4}  {s['min']:>12.4f}  {s['max']:>12.4f}  {s['mean']:>12.4f}  {s['range']:>12.4f}")
+    if not slots:
+        print("Nessuno slot da plottare.")
+        return
 
-    m = metrics
-    print(f"\n  Coppie totali : {m['tp']+m['fp']+m['tn']+m['fn']}")
-    print(f"  TP={m['tp']}  FP={m['fp']}  TN={m['tn']}  FN={m['fn']}")
-    print()
-    print(f"  Accuracy  : {m['accuracy']:.4f}")
-    print(f"  Precision : {m['precision']:.4f}")
-    print(f"  Recall    : {m['recall']:.4f}")
-    print(f"  F1-Score  : {m['f1']:.4f}")
-    print(f"{'='*62}\n")
+    non_empty_slots = [
+        slot_id
+        for slot_id, count in slots.items()
+        if count > 0
+    ]
 
+    if not non_empty_slots:
+        print("Tutti gli slot sono vuoti.")
+        return
 
-def print_scores(data: list, records: list) -> None:
-    print(f"\n{'PR':>4}  {'MAC':<20}  {'Label':>6}  {'Score':>14}")
-    print(f"{'-'*4}  {'-'*20}  {'-'*6}  {'-'*14}")
-    for idx, r in enumerate(records):
-        print(f"{idx:>4}  {str(r.get('mac', '')):20}  {r['label']:>6}  {r['score']:>14.6f}")
+    first_slot = min(non_empty_slots)
+    last_slot = max(non_empty_slots)
+
+    slot_ids = list(range(first_slot, last_slot + 1))
+    counts = [slots.get(slot_id, 0) for slot_id in slot_ids]
+
+    plt.figure(figsize=(12, 5))
+
+    plt.bar(slot_ids, counts, label="PR per slot")
+
+    plt.axhline(
+        y=min_samples,
+        color="red",
+        linestyle="--",
+        linewidth=2,
+        label=f"Min samples = {min_samples}"
+    )
+
+    plt.title("Numero di PR per slot")
+    plt.xlabel("Slot")
+    plt.ylabel("Numero di PR")
+
+    info_text = (
+        f"Threshold = {threshold}\n"
+        f"Min samples = {min_samples}\n"
+        f"Cluster trovati = {n_clusters}\n"
+        f"Cluster reali = {n_real_clusters}"
+    )
+
+    plt.text(
+        0.98,
+        0.95,
+        info_text,
+        transform=plt.gca().transAxes,
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=dict(
+            boxstyle="round",
+            facecolor="white",
+            alpha=0.8
+        )
+    )
+
+    plt.legend()
+    plt.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    plt.show()
